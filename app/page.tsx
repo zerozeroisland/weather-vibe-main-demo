@@ -3,6 +3,7 @@
 import React from "react";
 import { headers } from "next/headers";
 import WeatherMap from "./components/WeatherMap";
+import TempTrend from "./components/TempTrend";
 
 type CurrentWeather = {
   name: string;
@@ -358,31 +359,44 @@ function stormTint(label: string) {
   };
 }
 
-function getBaseUrlFromEnvOrHeaders(h: Headers) {
+function getBaseUrlFromEnvOrHeaders(h: { get: (key: string) => string | null }) {
+  // Allow an explicit override (helpful in some local/dev setups)
+  const explicit =
+    process.env.NEXT_PUBLIC_BASE_URL ||
+    process.env.NEXT_PUBLIC_SITE_URL ||
+    process.env.SITE_URL ||
+    "";
+
   // Prefer proxy headers (Vercel / reverse proxies)
   const forwardedHost = h.get("x-forwarded-host");
-  const host = forwardedHost ?? h.get("host") ?? process.env.VERCEL_URL ?? null;
+  const host =
+    forwardedHost ??
+    h.get("host") ??
+    (process.env.VERCEL_URL ? process.env.VERCEL_URL : null);
 
-  // Prefer forwarded proto; if we only have VERCEL_URL, assume https.
   const forwardedProto = h.get("x-forwarded-proto");
-  const proto =
-    forwardedProto ?? (process.env.VERCEL_URL ? "https" : "http");
+  const proto = forwardedProto ?? "http";
 
-  if (host) {
-    // VERCEL_URL may come as just "myapp.vercel.app" (no scheme)
-    const cleanHost = host.replace(/^https?:\/\//, "");
-    return `${proto}://${cleanHost}`;
-  }
+  // If we *still* don't have a host, fall back to localhost for dev so fetch()
+  // always receives an absolute URL on the server.
+  const safeHost = host ?? "localhost:3000";
 
-  // Local fallback
-  const port = process.env.PORT ?? "3000";
-  return `http://localhost:${port}`;
+  // VERCEL_URL often comes without protocol; normalize that too.
+  const normalizedHost =
+    safeHost.startsWith("http://") || safeHost.startsWith("https://")
+      ? safeHost.replace(/^https?:\/\//, "")
+      : safeHost;
+
+  // If an explicit base URL is provided, trust it (but strip trailing slash).
+  if (explicit) return explicit.replace(/\/$/, "");
+
+  return `${proto}://${normalizedHost}`;
 }
 
 export default async function Page() {
   // IMPORTANT: In your Next version, headers() is async.
   const h = await headers();
-  const baseUrl = getBaseUrlFromEnvOrHeaders(h as unknown as Headers);
+  const baseUrl = getBaseUrlFromEnvOrHeaders(h);
 
   const res = await fetch(`${baseUrl}/api/weather/current`, { cache: "no-store" });
 
@@ -403,6 +417,9 @@ export default async function Page() {
   const tz = forecast?.city?.timezone ?? 0;
   const coord = forecast?.city?.coord ?? null;
   const blocks = forecast?.list ?? [];
+
+  // Next 24 hours (8 x 3-hour blocks) for the Temp Trend widget
+  const next24hPoints = blocks.slice(0, 8).map((b) => ({ temp: b.tempF }));
 
   const place = `${data.name}${data.country ? `, ${data.country}` : ""}`;
   const hilo =
@@ -577,6 +594,9 @@ export default async function Page() {
                   {storm.summary}
                 </div>
               </div>
+
+              {/* Temp Trend (24h) */}
+              <TempTrend points={next24hPoints} currentTemp={data.tempF} />
             </div>
           </div>
 
